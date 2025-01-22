@@ -10,15 +10,32 @@ inputs:
   cookie:
     description: 'Your Forum Account Cookie'
     required: true
+  makeZip:
+    description:
+      'Automatically zip the full repository to upload it (true or false)'
+    required: false
+    default: true
+  assetName:
+    description: 'The asset name to re-upload'
+    required: false
+  beforeZipExecute:
+    description:
+      'Command to execute before zipping the repository (example: delete folders
+      or files)'
+    required: false
+  maxRetries:
+    description: 'The maximum number of retries'
+    required: false
+    default: 3
   zipPath:
     description: 'The path to the zip file to upload'
-    required: true
+    required: false
   assetId:
     description: 'The asset id to re-upload'
-    required: true
+    required: false
   chunkSize:
     description: 'The chunk size to split the file into'
-    required: true
+    required: false
     default: 2097152
 
 runs:
