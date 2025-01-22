@@ -23,18 +23,15 @@ CFX provides API keys for this action.
 1. Navigate to the **Cookies** section and search for `_t`.
 1. Copy the value of this cookie and save it in GitHub Secrets as
    `FORUM_COOKIE`.
-1. Use the action in your workflow:
+1. Use the action in your workflow (remember to checkout before!):
 
    ```yaml
    - name: Upload Escrow Resource
      uses: Tynopia/cfx-portal-upload
      with:
        cookie: ${{ secrets.FORUM_COOKIE }}
-       zipPath: /path/to/your/zip
-       assetId: 489345
+       assetName: 'my_asset'
    ```
-
-1. Additionally, you can configure the `chunkSize` option.
 
 > [!IMPORTANT]
 >
@@ -44,12 +41,20 @@ CFX provides API keys for this action.
 
 ## Input Parameters
 
-| Key                  | Value                                                     | How to get it                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| cookie               | The Forum Cookie to authenticate                          | Go to [forum.cfx.re](https://forum.cfx.re) and inspect the page with your browser's dev tools. Then search for the `_t` cookie.                                                      |
-| zipPath              | The path to your ZIP file that should be uploaded         | This is the file location of your packed ZIP file inside the Workflow Container, usually stored in `/home/...`.                                                                      |
-| assetId              | The Asset ID, which is a unique ID in the portal          | The Asset ID can be found at [portal.cfx.re](https://portal.cfx.re/assets/created-assets). ![image](https://github.com/user-attachments/assets/4176b7e7-cfbb-4e14-a488-04c4301f6082) |
-| chunkSize (Optional) | How large one chunk is for upload. Default: 2097152 bytes |                                                                                                                                                                                      |
+| Key        | Type     | Value                                                              | Description                                                                                                                                                                          |
+| ---------- | -------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| cookie     | string   | The Forum Cookie to authenticate                                   | Go to [forum.cfx.re](https://forum.cfx.re) and inspect the page with your browser's dev tools. Then search for the `_t` cookie.                                                      |
+| makeZip    | boolean? | Automatically zip the full repository to upload it (default: true) | This will remove the folders `.git/`/`.github/`/`.vscode/` from the repository before zipping.                                                                                       |
+| assetName  | string   | The asset name to re-upload                                        | This is the name of the asset you want to re-upload.                                                                                                                                 |
+| assetId    | number   | The Asset ID, which is a unique ID in the portal                   | The Asset ID can be found at [portal.cfx.re](https://portal.cfx.re/assets/created-assets). ![image](https://github.com/user-attachments/assets/4176b7e7-cfbb-4e14-a488-04c4301f6082) |
+| zipPath    | string?  | The path to your ZIP file that should be uploaded                  | This is the file location of your packed ZIP file inside the Workflow Container, usually stored in `/home/...`.                                                                      |
+| maxRetries | number?  | The maximum number of retries. (default: 3)                        | This is the maximum number of times the login will be retried if it fails.                                                                                                           |
+| chunkSize  | number?  | How large one chunk is for upload. Default: 2097152 bytes          |                                                                                                                                                                                      |
+
+> [!NOTE]
+>
+> `?` after the type indicates that the parameter is optional. if no assetName
+> or assetId is provided, the repository name will be used as assetName.
 
 ## How to Contribute
 
