@@ -35,7 +35,6 @@ export async function run(): Promise<void> {
     let assetName = core.getInput('assetName')
 
     let zipPath = core.getInput('zipPath')
-    const beforeZipExecute = core.getInput('beforeZipExecute')
     const makeZip = core.getInput('makeZip').toLowerCase() === 'true'
 
     const chunkSize = parseInt(core.getInput('chunkSize'))
@@ -70,7 +69,7 @@ export async function run(): Promise<void> {
         assetId = await resolveAssetId(assetName, cookies)
       }
 
-      zipPath = await getZipPath(zipPath, beforeZipExecute, makeZip)
+      zipPath = await getZipPath(zipPath, makeZip)
       await uploadZip(zipPath, assetId, chunkSize, cookies)
     } else {
       throw new Error(
@@ -181,16 +180,11 @@ async function getCookies(browser: Browser): Promise<string> {
 /**
  * Retrieves the zipPath or creates a zip based on the provided parameters.
  * @param zipPath - The path to the zip file.
- * @param beforeZipExecute - Command to execute before zipping.
  * @param makeZip - Flag indicating whether to create a zip file.
  * @returns {Promise<string>} Resolves with the path to the zip file.
  * @throws If neither zipPath nor makeZip is provided, or if the pre-zip command fails.
  */
-async function getZipPath(
-  zipPath: string,
-  beforeZipExecute: string,
-  makeZip: boolean
-): Promise<string> {
+async function getZipPath(zipPath: string, makeZip: boolean): Promise<string> {
   core.debug('Zip path: ' + JSON.stringify(zipPath))
   if (zipPath.length > 0) {
     core.debug('Using provided zip path.')
@@ -204,20 +198,6 @@ async function getZipPath(
   }
 
   core.info('Creating zip file ...')
-
-  // Run command before zipping
-  core.debug('Command before zipping: ' + beforeZipExecute)
-  if (beforeZipExecute && beforeZipExecute.length > 0) {
-    try {
-      core.debug('Running command before zipping...')
-      execSync(beforeZipExecute)
-    } catch (error: any) {
-      core.debug(error.message)
-      throw new Error(
-        'Failed to run command before zipping. See debug logs for more information.'
-      )
-    }
-  }
 
   // Clean up github things before zipping
   deleteIfExists('.git/')
