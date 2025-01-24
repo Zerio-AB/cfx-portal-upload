@@ -69,12 +69,13 @@ export async function resolveAssetId(
 }
 
 export function getUrl(type: keyof typeof Urls, id?: string): string {
-  let url = Urls.API + Urls[type]
-
+  const url = Urls.API + Urls[type]
   return id ? url.replace('{id}', id) : url
 }
 
-function buildTree(currentPath: string): any {
+type TreeNode = string | Record<string, TreeNode[]> | null
+
+function buildTree(currentPath: string): TreeNode {
   const stats = fs.statSync(currentPath)
 
   if (stats.isFile()) {
@@ -90,7 +91,7 @@ function buildTree(currentPath: string): any {
     }
   }
 
-  return null // Handle edge cases if needed
+  return null
 }
 
 export function getEnv(name: string): string {
@@ -122,7 +123,7 @@ export async function zipAsset(): Promise<string> {
   return path.resolve('cfx-portal-upload.zip')
 }
 
-export async function deleteIfExists(_path: string): Promise<void> {
+export function deleteIfExists(_path: string): void {
   _path = path.join(getEnv('GITHUB_WORKSPACE'), _path)
 
   try {
@@ -139,6 +140,6 @@ export async function deleteIfExists(_path: string): Promise<void> {
       core.debug(`${_path} does not exist, skipping`)
     }
   } catch (error) {
-    core.debug(`Skipping ${_path} deletion due to error: ${error}`)
+    core.debug(`Skipping ${_path} deletion due to error: ${error as string}`)
   }
 }

@@ -14,7 +14,6 @@ import {
   preparePuppeteer,
   zipAsset
 } from './utils'
-import { execSync } from 'child_process'
 
 /**
  * The main function for the action.
@@ -55,7 +54,7 @@ export async function run(): Promise<void> {
     }
 
     const redirectUrl = await getRedirectUrl(page, maxRetries)
-    setForumCookie(browser, page)
+    await setForumCookie(browser, page)
 
     await page.goto(redirectUrl, {
       waitUntil: 'networkidle0'
@@ -122,7 +121,7 @@ async function getRedirectUrl(page: Page, maxRetries: number): Promise<string> {
       await page.goto(forumUrl)
 
       loaded = true
-    } catch (error) {
+    } catch {
       core.info(`Failed to navigate to SSO URL. Retrying in 1 seconds...`)
       await new Promise(resolve => setTimeout(resolve, 1000))
       attempt++
@@ -203,7 +202,6 @@ async function getZipPath(zipPath: string, makeZip: boolean): Promise<string> {
   deleteIfExists('.git/')
   deleteIfExists('.github/')
   deleteIfExists('.vscode/')
-  deleteIfExists('.gitignore')
 
   return zipAsset()
 }

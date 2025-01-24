@@ -23,7 +23,8 @@ CFX provides API keys for this action.
 1. Navigate to the **Cookies** section and search for `_t`.
 1. Copy the value of this cookie and save it in GitHub Secrets as
    `FORUM_COOKIE`.
-1. Use the action in your workflow (remember to [checkout](https://github.com/actions/checkout) before!):
+1. Use the action in your workflow (remember to
+   [checkout](https://github.com/actions/checkout) before!):
 
    ```yaml
    - name: Upload Escrow Resource
