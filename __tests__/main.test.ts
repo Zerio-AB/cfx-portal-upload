@@ -53,8 +53,13 @@ describe('action', () => {
       switch (name) {
         case 'chunkSize':
           return '1024'
+        case 'makeZip':
+          return 'true'
+        case 'maxRetries':
+          return '1'
         case 'cookie':
         case 'assetId':
+        case 'assetName':
         case 'zipPath':
           return 'test-value'
         default:
