@@ -47,6 +47,7 @@ jobs:
   cfx-portal-upload:
     name: GitHub Actions Test
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
 
     steps:
       - name: Checkout
