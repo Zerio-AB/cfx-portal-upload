@@ -35,6 +35,7 @@ export async function run(): Promise<void> {
 
     let zipPath = core.getInput('zipPath')
     const makeZip = core.getInput('makeZip').toLowerCase() === 'true'
+    const skipUpload = core.getInput('skipUpload').toLowerCase() === 'true'
 
     const chunkSize = parseInt(core.getInput('chunkSize'))
     const maxRetries = parseInt(core.getInput('maxRetries'))
@@ -48,7 +49,8 @@ export async function run(): Promise<void> {
     }
 
     // No asset id or name provided, using the repository name
-    if (!assetId && !assetName) {
+    // If skipUpload is true, we don't need to update the asset name
+    if (!assetId && !assetName && !skipUpload) {
       core.debug('No asset id or name provided, using repository name...')
       assetName = basename(getEnv('GITHUB_WORKSPACE'))
     }
@@ -61,6 +63,11 @@ export async function run(): Promise<void> {
     })
 
     if (page.url().includes('portal.cfx.re')) {
+      if (skipUpload) {
+        core.info('Redirected to CFX Portal. Skipping upload ...')
+        return
+      }
+
       core.info('Redirected to CFX Portal. Uploading file ...')
       const cookies = await getCookies(browser)
 

@@ -49,6 +49,7 @@ CFX provides API keys for this action.
 | assetName  | string   | The asset name to re-upload                                        | This is the name of the asset you want to re-upload.                                                                                                                                 |
 | assetId    | number   | The Asset ID, which is a unique ID in the portal                   | The Asset ID can be found at [portal.cfx.re](https://portal.cfx.re/assets/created-assets). ![image](https://github.com/user-attachments/assets/4176b7e7-cfbb-4e14-a488-04c4301f6082) |
 | zipPath    | string?  | The path to your ZIP file that should be uploaded                  | This is the file location of your packed ZIP file inside the Workflow Container, usually stored in `/home/...`.                                                                      |
+| skipUpload | boolean? | Skip the upload and only log in to the portal                      | This will skip the asset upload to the portal and only go through the login process. Useful in cron jobs to prevent the cookie from getting invalidated due to inactivity            |
 | maxRetries | number?  | The maximum number of retries. (default: 3)                        | This is the maximum number of times the login will be retried if it fails.                                                                                                           |
 | chunkSize  | number?  | How large one chunk is for upload. Default: 2097152 bytes          |                                                                                                                                                                                      |
 
@@ -56,6 +57,27 @@ CFX provides API keys for this action.
 >
 > `?` after the type indicates that the parameter is optional. if no assetName  
 > or assetId is provided, the repository name will be used as assetName.
+
+## Skip Upload
+
+If you haven't uploaded an asset in a long time, the cookie will become invalid
+due to inactivity. To prevent this, you can use a cron job to log in to the
+portal and refresh the cookie.
+
+```yaml
+name: Refresh Cookie
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  - name: Login to Portal
+    uses: Tynopia/cfx-portal-upload
+    with:
+      cookie: ${{ secrets.FORUM_COOKIE }}
+      skipUpload: true
+```
 
 ## How to Contribute
 
