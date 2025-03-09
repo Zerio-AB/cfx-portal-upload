@@ -296437,14 +296437,22 @@ exports.getUrl = getUrl;
 exports.getEnv = getEnv;
 exports.zipAsset = zipAsset;
 exports.deleteIfExists = deleteIfExists;
+const browsers_1 = __nccwpck_require__(73403);
+const types_1 = __nccwpck_require__(38522);
+const os_1 = __nccwpck_require__(70857);
+const path_1 = __nccwpck_require__(16928);
 const core = __importStar(__nccwpck_require__(37484));
 const axios_1 = __importDefault(__nccwpck_require__(87269));
-const types_1 = __nccwpck_require__(38522);
 const fs_1 = __importDefault(__nccwpck_require__(79896));
-const path_1 = __importDefault(__nccwpck_require__(16928));
+const path_2 = __importDefault(__nccwpck_require__(16928));
 const yazl_1 = __importDefault(__nccwpck_require__(93044));
-const browsers_1 = __nccwpck_require__(73403);
-const CACHE_DIR = '/home/runner/.cache/puppeteer';
+/**
+ * Get the cache directory for Puppeteer.
+ * @returns {string} The cache directory.
+ */
+function getCacheDirectory() {
+    return (0, path_1.join)((0, os_1.homedir)(), '.cache', 'puppeteer');
+}
 /**
  * Prepare the Puppeteer environment by installing the necessary browser.
  * @returns {Promise<void>} Resolves when the environment is prepared.
@@ -296454,13 +296462,14 @@ async function preparePuppeteer() {
         core.info('Running locally, skipping Puppeteer setup ...');
         return;
     }
+    const cacheDirectory = getCacheDirectory();
     const installed = await (0, browsers_1.getInstalledBrowsers)({
-        cacheDir: CACHE_DIR
+        cacheDir: cacheDirectory
     });
     if (!installed.some(browser => browser.browser === browsers_1.Browser.CHROME)) {
         core.info('Installing Chrome ...');
         await (0, browsers_1.install)({
-            cacheDir: CACHE_DIR,
+            cacheDir: cacheDirectory,
             browser: browsers_1.Browser.CHROME,
             buildId: '131.0.6778.108'
         });
@@ -296494,12 +296503,12 @@ function getUrl(type, id) {
 function buildTree(currentPath) {
     const stats = fs_1.default.statSync(currentPath);
     if (stats.isFile()) {
-        return path_1.default.basename(currentPath); // Return file name
+        return path_2.default.basename(currentPath); // Return file name
     }
     if (stats.isDirectory()) {
         const children = fs_1.default.readdirSync(currentPath);
         return {
-            [path_1.default.basename(currentPath)]: children.map(child => buildTree(path_1.default.join(currentPath, child)))
+            [path_2.default.basename(currentPath)]: children.map(child => buildTree(path_2.default.join(currentPath, child)))
         };
     }
     return null;
@@ -296518,8 +296527,8 @@ async function zipAsset(assetName) {
     function addDirectoryToZip(dir, zipPath) {
         const entries = fs_1.default.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-            const fullPath = path_1.default.join(dir, entry.name);
-            const entryZipPath = path_1.default.join(zipPath, entry.name);
+            const fullPath = path_2.default.join(dir, entry.name);
+            const entryZipPath = path_2.default.join(zipPath, entry.name);
             if (entry.isDirectory()) {
                 core.debug(`Entering directory ${fullPath}...`);
                 addDirectoryToZip(fullPath, entryZipPath);
@@ -296540,13 +296549,13 @@ async function zipAsset(assetName) {
             .pipe(outputStream)
             .on('close', () => {
             console.log(`Asset zipped to ${outputZipPath}`);
-            resolve(path_1.default.resolve(outputZipPath));
+            resolve(path_2.default.resolve(outputZipPath));
         })
             .on('error', reject);
     });
 }
 function deleteIfExists(_path) {
-    _path = path_1.default.join(getEnv('GITHUB_WORKSPACE'), _path);
+    _path = path_2.default.join(getEnv('GITHUB_WORKSPACE'), _path);
     try {
         if (fs_1.default.existsSync(_path)) {
             core.debug(`Deleting ${_path}...`);
