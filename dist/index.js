@@ -296144,8 +296144,21 @@ async function run() {
         let zipPath = core.getInput('zipPath');
         const makeZip = core.getInput('makeZip').toLowerCase() === 'true';
         const skipUpload = core.getInput('skipUpload').toLowerCase() === 'true';
+        const deleteOlderVersions = core.getInput('deleteOlderVersions').toLowerCase() === 'true';
         const chunkSize = parseInt(core.getInput('chunkSize'));
         const maxRetries = parseInt(core.getInput('maxRetries'));
+        const betaInput = core.getInput('beta').toLowerCase();
+        let beta = false;
+        if (betaInput === 'true') {
+            beta = true;
+        }
+        else if (betaInput === 'false') {
+            beta = false;
+        }
+        else {
+            beta = await (0, utils_1.isBetaAsset)(zipPath);
+        }
+        const changelog = await (0, utils_1.getChangelog)(zipPath);
         if (isNaN(chunkSize)) {
             throw new Error('Invalid chunk size. Must be a number.');
         }
@@ -296158,6 +296171,7 @@ async function run() {
             core.debug('No asset id or name provided, using repository name...');
             assetName = (0, path_1.basename)((0, utils_1.getEnv)('GITHUB_WORKSPACE'));
         }
+        const version = await (0, utils_1.getFxManifestVersion)(zipPath);
         const redirectUrl = await getRedirectUrl(page, maxRetries);
         await setForumCookie(browser, page);
         await page.goto(redirectUrl, {
@@ -296174,14 +296188,33 @@ async function run() {
                 assetId = await (0, utils_1.resolveAssetId)(assetName, cookies);
             }
             zipPath = await getZipPath(assetName, zipPath, makeZip);
-            await uploadZip(zipPath, assetId, chunkSize, cookies);
+            const uploadedVersionId = await uploadZip(zipPath, assetId, chunkSize, cookies, beta, version, changelog);
+            if (deleteOlderVersions) {
+                core.info('Deleting older versions ...');
+                const versions = await (0, utils_1.getAssetVersions)(assetId, cookies);
+                for (const v of versions) {
+                    if (v.id !== uploadedVersionId) {
+                        await (0, utils_1.deleteAssetVersion)(assetId, v.id, cookies);
+                    }
+                }
+            }
         }
         else {
             throw new Error('Redirect failed. Make sure the provided Cookie is valid.');
         }
     }
     catch (error) {
-        if (error instanceof Error) {
+        if (axios_1.default.isAxiosError(error)) {
+            const status = error.response?.status;
+            const data = error.response?.data;
+            const message = error.message;
+            core.error(`API Request failed [${status}]: ${message}`);
+            if (data) {
+                core.error(`Response body: ${JSON.stringify(data, null, 2)}`);
+            }
+            core.setFailed(data?.message || data?.errors || message || 'Unknown error');
+        }
+        else if (error instanceof Error) {
             core.setFailed(error.message);
         }
     }
@@ -296289,10 +296322,13 @@ async function getZipPath(assetName, zipPath, makeZip) {
  * @param assetId
  * @param chunkSize
  * @param cookies
- * @returns {Promise<void>} Resolves when the re-upload process is initiated successfully.
+ * @param beta
+ * @param version
+ * @param changelog
+ * @returns {Promise<[number, number]>} Resolves when the re-upload process is initiated successfully.
  * @throws If the re-upload fails due to errors in the response.
  */
-async function startReupload(zipPath, assetId, chunkSize, cookies) {
+async function startReupload(zipPath, assetId, chunkSize, cookies, beta, version, changelog) {
     const stats = (0, fs_1.statSync)(zipPath);
     const totalSize = stats.size;
     const originalFileName = (0, path_1.basename)(zipPath);
@@ -296302,21 +296338,28 @@ async function startReupload(zipPath, assetId, chunkSize, cookies) {
     core.debug(`Original file name: ${originalFileName}`);
     core.debug(`Chunk size: ${chunkSize}`);
     core.debug(`Chunk count: ${chunkCount}`);
-    const reUploadReponse = await axios_1.default.post((0, utils_1.getUrl)('REUPLOAD', assetId), {
+    core.debug(`Beta: ${beta}`);
+    core.debug(`Version: ${version}`);
+    core.debug(`Changelog: ${changelog}`);
+    const reUploadResponse = await axios_1.default.post((0, utils_1.getUrl)('REUPLOAD', { id: assetId }), {
         chunk_count: chunkCount,
         chunk_size: chunkSize,
         name: originalFileName,
         original_file_name: originalFileName,
-        total_size: totalSize
+        total_size: totalSize,
+        release_candidate: beta,
+        version: version,
+        changelog: changelog
     }, {
         headers: {
             Cookie: cookies
         }
     });
-    if (reUploadReponse.data.errors !== null) {
-        core.debug(JSON.stringify(reUploadReponse.data.errors));
+    if (reUploadResponse.data.errors !== null) {
+        core.debug(JSON.stringify(reUploadResponse.data.errors));
         throw new Error('Failed to re-upload file. See debug logs for more information.');
     }
+    return [reUploadResponse.data.asset_id, reUploadResponse.data.version_id];
 }
 /**
  * Uploads a zip file in chunks to the specified asset.
@@ -296324,11 +296367,14 @@ async function startReupload(zipPath, assetId, chunkSize, cookies) {
  * @param assetId
  * @param chunkSize.
  * @param cookies
- * @returns {Promise<void>} Resolves when the upload is complete.
+ * @param beta
+ * @param version
+ * @param changelog
+ * @returns {Promise<number>} Resolves with the uploaded version ID when the upload is complete.
  * @throws If the upload fails at any stage.
  */
-async function uploadZip(zipPath, assetId, chunkSize, cookies) {
-    await startReupload(zipPath, assetId, chunkSize, cookies);
+async function uploadZip(zipPath, assetId, chunkSize, cookies, beta, version, changelog) {
+    const [assetIdReupload, versionId] = await startReupload(zipPath, assetId, chunkSize, cookies, beta, version, changelog);
     let chunkIndex = 0;
     const stats = (0, fs_1.statSync)(zipPath);
     const totalSize = stats.size;
@@ -296341,7 +296387,7 @@ async function uploadZip(zipPath, assetId, chunkSize, cookies) {
             filename: 'blob',
             contentType: 'application/octet-stream'
         });
-        await axios_1.default.post((0, utils_1.getUrl)('UPLOAD_CHUNK', assetId), form, {
+        await axios_1.default.post((0, utils_1.getUrl)('UPLOAD_CHUNK', { id: assetIdReupload, version_id: versionId }), form, {
             headers: {
                 ...form.getHeaders(),
                 Cookie: cookies
@@ -296350,16 +296396,18 @@ async function uploadZip(zipPath, assetId, chunkSize, cookies) {
         core.info(`Uploaded chunk ${chunkIndex + 1}/${chunkCount}`);
         chunkIndex++;
     }
-    await completeUpload(assetId, cookies);
+    await completeUpload(assetIdReupload, versionId, cookies);
+    return versionId;
 }
 /**
  * Completes the upload process.
  * @param assetId
+ * @param versionId
  * @param cookies
  * @returns {Promise<void>} Resolves when the upload is complete.
  */
-async function completeUpload(assetId, cookies) {
-    await axios_1.default.post((0, utils_1.getUrl)('COMPLETE_UPLOAD', assetId), {}, {
+async function completeUpload(assetId, versionId, cookies) {
+    await axios_1.default.post((0, utils_1.getUrl)('COMPLETE_UPLOAD', { id: assetId, version_id: versionId }), {}, {
         headers: {
             Cookie: cookies
         }
@@ -296382,8 +296430,10 @@ var Urls;
     Urls["API"] = "https://portal-api.cfx.re/v1/";
     Urls["SSO"] = "auth/discourse?return=";
     Urls["REUPLOAD"] = "assets/{id}/re-upload";
-    Urls["UPLOAD_CHUNK"] = "assets/{id}/upload-chunk";
-    Urls["COMPLETE_UPLOAD"] = "assets/{id}/complete-upload";
+    Urls["UPLOAD_CHUNK"] = "assets/{id}/versions/{version_id}/upload-chunk";
+    Urls["COMPLETE_UPLOAD"] = "assets/{id}/versions/{version_id}/complete-upload";
+    Urls["ASSET_DETAIL"] = "assets/{id}";
+    Urls["DELETE_VERSION"] = "assets/{id}/versions/{version_id}";
 })(Urls || (exports.Urls = Urls = {}));
 
 
@@ -296431,12 +296481,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.clearFileCache = clearFileCache;
+exports.getCachedFileContent = getCachedFileContent;
 exports.preparePuppeteer = preparePuppeteer;
 exports.resolveAssetId = resolveAssetId;
 exports.getUrl = getUrl;
 exports.getEnv = getEnv;
 exports.zipAsset = zipAsset;
 exports.deleteIfExists = deleteIfExists;
+exports.isBetaAsset = isBetaAsset;
+exports.getFxManifestVersion = getFxManifestVersion;
+exports.getCommitMessage = getCommitMessage;
+exports.getChangelog = getChangelog;
+exports.getAssetVersions = getAssetVersions;
+exports.deleteAssetVersion = deleteAssetVersion;
 const browsers_1 = __nccwpck_require__(73403);
 const types_1 = __nccwpck_require__(38522);
 const os_1 = __nccwpck_require__(70857);
@@ -296446,6 +296504,87 @@ const axios_1 = __importDefault(__nccwpck_require__(87269));
 const fs_1 = __importDefault(__nccwpck_require__(79896));
 const path_2 = __importDefault(__nccwpck_require__(16928));
 const yazl_1 = __importDefault(__nccwpck_require__(93044));
+const yauzl_1 = __importDefault(__nccwpck_require__(20663));
+const fileCache = {};
+/**
+ * Clears the file cache. Used for testing.
+ */
+function clearFileCache() {
+    for (const key in fileCache) {
+        delete fileCache[key];
+    }
+}
+async function readFileFromZip(zipPath, filePath, allowOneLevelDeeper = false) {
+    return new Promise((resolve, reject) => {
+        core.debug(`Opening zip ${zipPath}..., looking for file ${filePath}`);
+        yauzl_1.default.open(zipPath, { lazyEntries: true }, (err, zipfile) => {
+            if (err)
+                return reject(err);
+            const normalizedTarget = filePath.replace(/\\/g, '/');
+            zipfile.readEntry();
+            zipfile.on('entry', (entry) => {
+                core.debug(`Entry: ${entry.fileName}`);
+                const matchesDirectly = entry.fileName === normalizedTarget;
+                const matchesOneLevelDeeper = allowOneLevelDeeper &&
+                    entry.fileName.endsWith(`/${normalizedTarget}`) &&
+                    entry.fileName.split('/').length ===
+                        normalizedTarget.split('/').length + 1;
+                if (!matchesDirectly && !matchesOneLevelDeeper) {
+                    zipfile.readEntry();
+                    return;
+                }
+                core.debug(`Reading file ${entry.fileName} from zip...`);
+                zipfile.openReadStream(entry, (err, stream) => {
+                    if (err)
+                        return reject(err);
+                    let content = '';
+                    stream.on('data', chunk => {
+                        content += chunk;
+                    });
+                    stream.on('end', () => {
+                        resolve(content);
+                    });
+                });
+            });
+            zipfile.on('end', () => {
+                reject(new Error(`File ${filePath} not found in zip`));
+            });
+        });
+    });
+}
+async function getCachedFileContent(filePath, zipPath, allowOneLevelDeeper = false) {
+    if (fileCache[filePath]) {
+        return fileCache[filePath];
+    }
+    let content;
+    if (zipPath && fs_1.default.existsSync(zipPath)) {
+        content = await readFileFromZip(zipPath, filePath, allowOneLevelDeeper);
+    }
+    else {
+        const workspacePath = getEnv('GITHUB_WORKSPACE');
+        let fullPath = path_2.default.join(workspacePath, filePath);
+        if (!fs_1.default.existsSync(fullPath) && allowOneLevelDeeper) {
+            const parentDir = path_2.default.dirname(fullPath);
+            const fileName = path_2.default.basename(fullPath);
+            const subdirs = fs_1.default
+                .readdirSync(parentDir, { withFileTypes: true })
+                .filter(dirent => dirent.isDirectory());
+            for (const dir of subdirs) {
+                const candidate = path_2.default.join(parentDir, dir.name, fileName);
+                if (fs_1.default.existsSync(candidate)) {
+                    fullPath = candidate;
+                    break;
+                }
+            }
+        }
+        if (!fs_1.default.existsSync(fullPath)) {
+            throw new Error(`File ${filePath} not found`);
+        }
+        content = fs_1.default.readFileSync(fullPath, 'utf8');
+    }
+    fileCache[filePath] = content;
+    return content;
+}
 /**
  * Get the cache directory for Puppeteer.
  * @returns {string} The cache directory.
@@ -296496,9 +296635,14 @@ async function resolveAssetId(name, cookies) {
     core.debug(JSON.stringify(search.data));
     throw new Error(`Failed to find asset id for "${name}" exact match. See debug logs for more information.`);
 }
-function getUrl(type, id) {
-    const url = types_1.Urls.API + types_1.Urls[type];
-    return id ? url.replace('{id}', id) : url;
+function getUrl(type, params) {
+    let url = types_1.Urls.API + types_1.Urls[type];
+    if (params) {
+        for (const [key, value] of Object.entries(params)) {
+            url = url.replace(`{${key}}`, String(value));
+        }
+    }
+    return url;
 }
 function buildTree(currentPath) {
     const stats = fs_1.default.statSync(currentPath);
@@ -296548,7 +296692,7 @@ async function zipAsset(assetName) {
         zipfile.outputStream
             .pipe(outputStream)
             .on('close', () => {
-            console.log(`Asset zipped to ${outputZipPath}`);
+            core.info(`Asset zipped to ${outputZipPath}`);
             resolve(path_2.default.resolve(outputZipPath));
         })
             .on('error', reject);
@@ -296574,6 +296718,103 @@ function deleteIfExists(_path) {
     catch (error) {
         core.debug(`Skipping ${_path} deletion due to error: ${error}`);
     }
+}
+/**
+ * Checks if fxmanifest.lua has a beta tag.
+ * @returns {boolean} True if the beta tag is found.
+ */
+async function isBetaAsset(zipPath) {
+    try {
+        const content = await getCachedFileContent('fxmanifest.lua', zipPath, true);
+        const betaRegex = /^beta\s+['"].*['"]/m;
+        return betaRegex.test(content);
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Extracts the version from fxmanifest.lua.
+ * @returns {string} The version string.
+ * @throws If fxmanifest.lua is not found or does not have a version tag.
+ */
+async function getFxManifestVersion(zipPath) {
+    const content = await getCachedFileContent('fxmanifest.lua', zipPath, true);
+    const versionRegex = /^version\s+['"](.*)['"]/m;
+    const match = content.match(versionRegex);
+    if (!match || !match[1]) {
+        throw new Error("fxmanifest.lua does not have a `version '...'` tag.");
+    }
+    return match[1];
+}
+/**
+ * Gets the commit message that triggered the action.
+ * @returns {string} The commit message.
+ */
+function getCommitMessage() {
+    try {
+        const eventPath = process.env.GITHUB_EVENT_PATH;
+        if (eventPath && fs_1.default.existsSync(eventPath)) {
+            const eventData = JSON.parse(fs_1.default.readFileSync(eventPath, 'utf8'));
+            if (eventData.head_commit && eventData.head_commit.message) {
+                return eventData.head_commit.message;
+            }
+        }
+    }
+    catch (error) {
+        const _error = error instanceof Error ? error.message : String(error);
+        core.debug(`Failed to get commit message from event payload: ${_error}`);
+    }
+    return 'No changelog provided';
+}
+/**
+ * Gets the changelog based on inputs or commit message.
+ * @returns {string} The changelog string.
+ */
+async function getChangelog(zipPath) {
+    const changelog = core.getInput('changelog');
+    if (changelog) {
+        return changelog;
+    }
+    const changelogFile = core.getInput('changelogFile');
+    if (changelogFile) {
+        try {
+            return await getCachedFileContent(changelogFile, zipPath);
+        }
+        catch {
+            core.warning(`Changelog file not found at ${changelogFile}. Falling back to commit message.`);
+        }
+    }
+    return getCommitMessage();
+}
+/**
+ * Fetches all versions for a given asset.
+ * @param assetId The ID of the asset.
+ * @param cookies The authentication cookies.
+ * @returns {Promise<AssetVersion[]>} A list of asset versions.
+ */
+async function getAssetVersions(assetId, cookies) {
+    core.debug(`Fetching versions for asset ${assetId}...`);
+    const response = await axios_1.default.get(getUrl('ASSET_DETAIL', { id: assetId }), {
+        headers: {
+            Cookie: cookies
+        }
+    });
+    return response.data.versions;
+}
+/**
+ * Placeholder for deleting an asset version.
+ * @param assetId The ID of the asset.
+ * @param versionId The ID of the version to delete.
+ * @param cookies The authentication cookies.
+ */
+async function deleteAssetVersion(assetId, versionId, cookies) {
+    core.info(`Deleting version ${versionId} of asset ${assetId}...`);
+    await axios_1.default.delete(getUrl('DELETE_VERSION', { id: assetId, version_id: versionId }), {
+        headers: {
+            Cookie: cookies
+        }
+    });
 }
 
 

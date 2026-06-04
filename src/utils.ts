@@ -1,5 +1,5 @@
 import { Browser, getInstalledBrowsers, install } from '@puppeteer/browsers'
-import { SearchResponse, Urls } from './types'
+import { AssetDetail, SearchResponse, Urls } from './types'
 import { homedir } from 'os'
 import { join } from 'path'
 
@@ -8,6 +8,121 @@ import axios from 'axios'
 import fs from 'fs'
 import path from 'path'
 import yazl from 'yazl'
+import yauzl from 'yauzl'
+import { Entry } from 'yauzl'
+
+const fileCache: Record<string, string> = {}
+
+/**
+ * Clears the file cache. Used for testing.
+ */
+export function clearFileCache(): void {
+  for (const key in fileCache) {
+    delete fileCache[key]
+  }
+}
+
+async function readFileFromZip(
+  zipPath: string,
+  filePath: string,
+  allowOneLevelDeeper = false
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    core.debug(`Opening zip ${zipPath}..., looking for file ${filePath}`)
+
+    yauzl.open(zipPath, { lazyEntries: true }, (err, zipfile) => {
+      if (err) return reject(err)
+
+      const normalizedTarget = filePath.replace(/\\/g, '/')
+
+      zipfile.readEntry()
+
+      zipfile.on('entry', (entry: Entry) => {
+        core.debug(`Entry: ${entry.fileName}`)
+
+        const matchesDirectly = entry.fileName === normalizedTarget
+
+        const matchesOneLevelDeeper =
+          allowOneLevelDeeper &&
+          entry.fileName.endsWith(`/${normalizedTarget}`) &&
+          entry.fileName.split('/').length ===
+            normalizedTarget.split('/').length + 1
+
+        if (!matchesDirectly && !matchesOneLevelDeeper) {
+          zipfile.readEntry()
+          return
+        }
+
+        core.debug(`Reading file ${entry.fileName} from zip...`)
+
+        zipfile.openReadStream(entry, (err, stream) => {
+          if (err) return reject(err)
+
+          let content = ''
+
+          stream.on('data', chunk => {
+            content += chunk
+          })
+
+          stream.on('end', () => {
+            resolve(content)
+          })
+        })
+      })
+
+      zipfile.on('end', () => {
+        reject(new Error(`File ${filePath} not found in zip`))
+      })
+    })
+  })
+}
+
+export async function getCachedFileContent(
+  filePath: string,
+  zipPath?: string,
+  allowOneLevelDeeper = false
+): Promise<string> {
+  if (fileCache[filePath]) {
+    return fileCache[filePath]
+  }
+
+  let content: string
+
+  if (zipPath && fs.existsSync(zipPath)) {
+    content = await readFileFromZip(zipPath, filePath, allowOneLevelDeeper)
+  } else {
+    const workspacePath = getEnv('GITHUB_WORKSPACE')
+
+    let fullPath = path.join(workspacePath, filePath)
+
+    if (!fs.existsSync(fullPath) && allowOneLevelDeeper) {
+      const parentDir = path.dirname(fullPath)
+      const fileName = path.basename(fullPath)
+
+      const subdirs = fs
+        .readdirSync(parentDir, { withFileTypes: true })
+        .filter(dirent => dirent.isDirectory())
+
+      for (const dir of subdirs) {
+        const candidate = path.join(parentDir, dir.name, fileName)
+
+        if (fs.existsSync(candidate)) {
+          fullPath = candidate
+          break
+        }
+      }
+    }
+
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`File ${filePath} not found`)
+    }
+
+    content = fs.readFileSync(fullPath, 'utf8')
+  }
+
+  fileCache[filePath] = content
+  return content
+}
 
 /**
  * Get the cache directory for Puppeteer.
@@ -78,9 +193,19 @@ export async function resolveAssetId(
   )
 }
 
-export function getUrl(type: keyof typeof Urls, id?: string): string {
-  const url = Urls.API + Urls[type]
-  return id ? url.replace('{id}', id) : url
+export function getUrl(
+  type: keyof typeof Urls,
+  params?: Record<string, string | number>
+): string {
+  let url = Urls.API + Urls[type]
+
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      url = url.replace(`{${key}}`, String(value))
+    }
+  }
+
+  return url
 }
 
 type TreeNode = string | Record<string, TreeNode[]> | null
@@ -147,7 +272,7 @@ export async function zipAsset(assetName: string): Promise<string> {
     zipfile.outputStream
       .pipe(outputStream)
       .on('close', () => {
-        console.log(`Asset zipped to ${outputZipPath}`)
+        core.info(`Asset zipped to ${outputZipPath}`)
         resolve(path.resolve(outputZipPath))
       })
       .on('error', reject)
@@ -173,4 +298,137 @@ export function deleteIfExists(_path: string): void {
   } catch (error) {
     core.debug(`Skipping ${_path} deletion due to error: ${error as string}`)
   }
+}
+
+/**
+ * Checks if fxmanifest.lua has a beta tag.
+ * @returns {boolean} True if the beta tag is found.
+ */
+export async function isBetaAsset(zipPath?: string): Promise<boolean> {
+  try {
+    const content = await getCachedFileContent('fxmanifest.lua', zipPath, true)
+    const betaRegex = /^beta\s+['"].*['"]/m
+
+    return betaRegex.test(content)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Extracts the version from fxmanifest.lua.
+ * @returns {string} The version string.
+ * @throws If fxmanifest.lua is not found or does not have a version tag.
+ */
+export async function getFxManifestVersion(zipPath?: string): Promise<string> {
+  const content = await getCachedFileContent('fxmanifest.lua', zipPath, true)
+  const versionRegex = /^version\s+['"](.*)['"]/m
+
+  const match = content.match(versionRegex)
+
+  if (!match || !match[1]) {
+    throw new Error("fxmanifest.lua does not have a `version '...'` tag.")
+  }
+
+  return match[1]
+}
+
+type CommitEvent = {
+  head_commit?: { message?: string }
+}
+
+/**
+ * Gets the commit message that triggered the action.
+ * @returns {string} The commit message.
+ */
+export function getCommitMessage(): string {
+  try {
+    const eventPath = process.env.GITHUB_EVENT_PATH
+    if (eventPath && fs.existsSync(eventPath)) {
+      const eventData = JSON.parse(
+        fs.readFileSync(eventPath, 'utf8')
+      ) as CommitEvent
+
+      if (eventData.head_commit && eventData.head_commit.message) {
+        return eventData.head_commit.message
+      }
+    }
+  } catch (error) {
+    const _error = error instanceof Error ? error.message : String(error)
+
+    core.debug(`Failed to get commit message from event payload: ${_error}`)
+  }
+
+  return 'No changelog provided'
+}
+
+/**
+ * Gets the changelog based on inputs or commit message.
+ * @returns {string} The changelog string.
+ */
+export async function getChangelog(zipPath?: string): Promise<string> {
+  const changelog = core.getInput('changelog')
+  if (changelog) {
+    return changelog
+  }
+
+  const changelogFile = core.getInput('changelogFile')
+  if (changelogFile) {
+    try {
+      return await getCachedFileContent(changelogFile, zipPath)
+    } catch {
+      core.warning(
+        `Changelog file not found at ${changelogFile}. Falling back to commit message.`
+      )
+    }
+  }
+
+  return getCommitMessage()
+}
+
+/**
+ * Fetches all versions for a given asset.
+ * @param assetId The ID of the asset.
+ * @param cookies The authentication cookies.
+ * @returns {Promise<AssetVersion[]>} A list of asset versions.
+ */
+export async function getAssetVersions(
+  assetId: string,
+  cookies: string
+): Promise<AssetDetail['versions']> {
+  core.debug(`Fetching versions for asset ${assetId}...`)
+
+  const response = await axios.get<AssetDetail>(
+    getUrl('ASSET_DETAIL', { id: assetId }),
+    {
+      headers: {
+        Cookie: cookies
+      }
+    }
+  )
+
+  return response.data.versions
+}
+
+/**
+ * Placeholder for deleting an asset version.
+ * @param assetId The ID of the asset.
+ * @param versionId The ID of the version to delete.
+ * @param cookies The authentication cookies.
+ */
+export async function deleteAssetVersion(
+  assetId: string,
+  versionId: number,
+  cookies: string
+): Promise<void> {
+  core.info(`Deleting version ${versionId} of asset ${assetId}...`)
+
+  await axios.delete(
+    getUrl('DELETE_VERSION', { id: assetId, version_id: versionId }),
+    {
+      headers: {
+        Cookie: cookies
+      }
+    }
+  )
 }

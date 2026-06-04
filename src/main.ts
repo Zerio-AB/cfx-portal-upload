@@ -12,7 +12,12 @@ import {
   getEnv,
   getUrl,
   preparePuppeteer,
-  zipAsset
+  zipAsset,
+  isBetaAsset,
+  getFxManifestVersion,
+  getChangelog,
+  getAssetVersions,
+  deleteAssetVersion
 } from './utils'
 
 /**
@@ -36,9 +41,24 @@ export async function run(): Promise<void> {
     let zipPath = core.getInput('zipPath')
     const makeZip = core.getInput('makeZip').toLowerCase() === 'true'
     const skipUpload = core.getInput('skipUpload').toLowerCase() === 'true'
+    const deleteOlderVersions =
+      core.getInput('deleteOlderVersions').toLowerCase() === 'true'
 
     const chunkSize = parseInt(core.getInput('chunkSize'))
     const maxRetries = parseInt(core.getInput('maxRetries'))
+
+    const betaInput = core.getInput('beta').toLowerCase()
+    let beta = false
+
+    if (betaInput === 'true') {
+      beta = true
+    } else if (betaInput === 'false') {
+      beta = false
+    } else {
+      beta = await isBetaAsset(zipPath)
+    }
+
+    const changelog = await getChangelog(zipPath)
 
     if (isNaN(chunkSize)) {
       throw new Error('Invalid chunk size. Must be a number.')
@@ -54,6 +74,8 @@ export async function run(): Promise<void> {
       core.debug('No asset id or name provided, using repository name...')
       assetName = basename(getEnv('GITHUB_WORKSPACE'))
     }
+
+    const version = await getFxManifestVersion(zipPath)
 
     const redirectUrl = await getRedirectUrl(page, maxRetries)
     await setForumCookie(browser, page)
@@ -76,14 +98,50 @@ export async function run(): Promise<void> {
       }
 
       zipPath = await getZipPath(assetName, zipPath, makeZip)
-      await uploadZip(zipPath, assetId, chunkSize, cookies)
+      const uploadedVersionId = await uploadZip(
+        zipPath,
+        assetId,
+        chunkSize,
+        cookies,
+        beta,
+        version,
+        changelog
+      )
+
+      if (deleteOlderVersions) {
+        core.info('Deleting older versions ...')
+        const versions = await getAssetVersions(assetId, cookies)
+        for (const v of versions) {
+          if (v.id !== uploadedVersionId) {
+            await deleteAssetVersion(assetId, v.id, cookies)
+          }
+        }
+      }
     } else {
       throw new Error(
         'Redirect failed. Make sure the provided Cookie is valid.'
       )
     }
   } catch (error) {
-    if (error instanceof Error) {
+    if (axios.isAxiosError(error)) {
+      type ErrorData = {
+        message?: string
+        errors?: string
+      }
+
+      const status = error.response?.status
+      const data = error.response?.data as ErrorData | undefined
+      const message = error.message
+
+      core.error(`API Request failed [${status}]: ${message}`)
+      if (data) {
+        core.error(`Response body: ${JSON.stringify(data, null, 2)}`)
+      }
+
+      core.setFailed(
+        data?.message || data?.errors || message || 'Unknown error'
+      )
+    } else if (error instanceof Error) {
       core.setFailed(error.message)
     }
   } finally {
@@ -224,15 +282,21 @@ async function getZipPath(
  * @param assetId
  * @param chunkSize
  * @param cookies
- * @returns {Promise<void>} Resolves when the re-upload process is initiated successfully.
+ * @param beta
+ * @param version
+ * @param changelog
+ * @returns {Promise<[number, number]>} Resolves when the re-upload process is initiated successfully.
  * @throws If the re-upload fails due to errors in the response.
  */
 async function startReupload(
   zipPath: string,
   assetId: string,
   chunkSize: number,
-  cookies: string
-): Promise<void> {
+  cookies: string,
+  beta: boolean,
+  version: string,
+  changelog: string
+): Promise<[number, number]> {
   const stats = statSync(zipPath)
   const totalSize = stats.size
   const originalFileName = basename(zipPath)
@@ -244,15 +308,22 @@ async function startReupload(
   core.debug(`Original file name: ${originalFileName}`)
   core.debug(`Chunk size: ${chunkSize}`)
   core.debug(`Chunk count: ${chunkCount}`)
+  core.debug(`Beta: ${beta}`)
+  core.debug(`Version: ${version}`)
+  core.debug(`Changelog: ${changelog}`)
 
-  const reUploadReponse = await axios.post<ReUploadResponse>(
-    getUrl('REUPLOAD', assetId),
+  const reUploadResponse = await axios.post<ReUploadResponse>(
+    getUrl('REUPLOAD', { id: assetId }),
     {
       chunk_count: chunkCount,
       chunk_size: chunkSize,
       name: originalFileName,
       original_file_name: originalFileName,
-      total_size: totalSize
+      total_size: totalSize,
+
+      release_candidate: beta,
+      version: version,
+      changelog: changelog
     },
     {
       headers: {
@@ -261,12 +332,14 @@ async function startReupload(
     }
   )
 
-  if (reUploadReponse.data.errors !== null) {
-    core.debug(JSON.stringify(reUploadReponse.data.errors))
+  if (reUploadResponse.data.errors !== null) {
+    core.debug(JSON.stringify(reUploadResponse.data.errors))
     throw new Error(
       'Failed to re-upload file. See debug logs for more information.'
     )
   }
+
+  return [reUploadResponse.data.asset_id, reUploadResponse.data.version_id]
 }
 
 /**
@@ -275,16 +348,30 @@ async function startReupload(
  * @param assetId
  * @param chunkSize.
  * @param cookies
- * @returns {Promise<void>} Resolves when the upload is complete.
+ * @param beta
+ * @param version
+ * @param changelog
+ * @returns {Promise<number>} Resolves with the uploaded version ID when the upload is complete.
  * @throws If the upload fails at any stage.
  */
 async function uploadZip(
   zipPath: string,
   assetId: string,
   chunkSize: number,
-  cookies: string
-): Promise<void> {
-  await startReupload(zipPath, assetId, chunkSize, cookies)
+  cookies: string,
+  beta: boolean,
+  version: string,
+  changelog: string
+): Promise<number> {
+  const [assetIdReupload, versionId] = await startReupload(
+    zipPath,
+    assetId,
+    chunkSize,
+    cookies,
+    beta,
+    version,
+    changelog
+  )
 
   let chunkIndex = 0
 
@@ -302,30 +389,41 @@ async function uploadZip(
       contentType: 'application/octet-stream'
     })
 
-    await axios.post(getUrl('UPLOAD_CHUNK', assetId), form, {
-      headers: {
-        ...form.getHeaders(),
-        Cookie: cookies
+    await axios.post(
+      getUrl('UPLOAD_CHUNK', { id: assetIdReupload, version_id: versionId }),
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          Cookie: cookies
+        }
       }
-    })
+    )
 
     core.info(`Uploaded chunk ${chunkIndex + 1}/${chunkCount}`)
 
     chunkIndex++
   }
 
-  await completeUpload(assetId, cookies)
+  await completeUpload(assetIdReupload, versionId, cookies)
+
+  return versionId
 }
 
 /**
  * Completes the upload process.
  * @param assetId
+ * @param versionId
  * @param cookies
  * @returns {Promise<void>} Resolves when the upload is complete.
  */
-async function completeUpload(assetId: string, cookies: string): Promise<void> {
+async function completeUpload(
+  assetId: number,
+  versionId: number,
+  cookies: string
+): Promise<void> {
   await axios.post(
-    getUrl('COMPLETE_UPLOAD', assetId),
+    getUrl('COMPLETE_UPLOAD', { id: assetId, version_id: versionId }),
     {},
     {
       headers: {
