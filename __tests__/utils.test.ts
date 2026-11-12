@@ -151,6 +151,29 @@ describe('utils', () => {
       expect(content).toBe('zip-content-deeper')
     })
 
+    it('should find file two levels deeper in zip if allowOneLevelDeeper is true', async () => {
+      const zipPath = await createZip({
+        '[pack]/resource/file-in-zip.txt': 'zip-content-two-deep'
+      })
+
+      const content = await getCachedFileContent(
+        'file-in-zip.txt',
+        zipPath,
+        true
+      )
+      expect(content).toBe('zip-content-two-deep')
+    })
+
+    it('should not find file three levels deeper in zip', async () => {
+      const zipPath = await createZip({
+        'a/b/c/file-in-zip.txt': 'too-deep'
+      })
+
+      await expect(
+        getCachedFileContent('file-in-zip.txt', zipPath, true)
+      ).rejects.toThrow('not found in zip')
+    })
+
     it('should find file one level deeper locally if allowOneLevelDeeper is true', async () => {
       const workspace = createWorkspace()
       fs.mkdirSync(path.join(workspace, 'subdir'))

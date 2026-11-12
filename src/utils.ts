@@ -43,11 +43,15 @@ async function readFileFromZip(
 
         const matchesDirectly = entry.fileName === normalizedTarget
 
+        // One or two folders deep: a single resource in its own folder, or
+        // several resources inside a category folder such as [radio]/.
+        const extraDepth =
+          entry.fileName.split('/').length - normalizedTarget.split('/').length
         const matchesOneLevelDeeper =
           allowOneLevelDeeper &&
           entry.fileName.endsWith(`/${normalizedTarget}`) &&
-          entry.fileName.split('/').length ===
-            normalizedTarget.split('/').length + 1
+          extraDepth >= 1 &&
+          extraDepth <= 2
 
         if (!matchesDirectly && !matchesOneLevelDeeper) {
           zipfile.readEntry()

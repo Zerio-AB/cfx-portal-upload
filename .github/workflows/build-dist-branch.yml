@@ -1,0 +1,36 @@
+# Builds dist/ for this branch on GitHub's runner and keeps it as an artifact,
+# so the bundle that gets committed was never built on a developer machine.
+# check-dist.yml only runs for main and for pull requests into it.
+name: Build dist (branch)
+
+on:
+  push:
+    branches:
+      - nested-manifest
+    paths:
+      - src/**
+      - __tests__/**
+      - .github/workflows/build-dist-branch.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run ci-test
+      - run: npm run bundle
+      - name: Show what the build changed
+        run: git status --short
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
