@@ -118923,7 +118923,8 @@ async function readFileFromZip(zipPath, filePath, allowOneLevelDeeper = false) {
       zipfile.on("entry", (entry) => {
         core.debug(`Entry: ${entry.fileName}`);
         const matchesDirectly = entry.fileName === normalizedTarget;
-        const matchesOneLevelDeeper = allowOneLevelDeeper && entry.fileName.endsWith(`/${normalizedTarget}`) && entry.fileName.split("/").length === normalizedTarget.split("/").length + 1;
+        const extraDepth = entry.fileName.split("/").length - normalizedTarget.split("/").length;
+        const matchesOneLevelDeeper = allowOneLevelDeeper && entry.fileName.endsWith(`/${normalizedTarget}`) && extraDepth >= 1 && extraDepth <= 2;
         if (!matchesDirectly && !matchesOneLevelDeeper) {
           zipfile.readEntry();
           return;
