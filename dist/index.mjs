@@ -119188,6 +119188,16 @@ async function deleteAssetVersion(assetId, versionId, cookies) {
     }
   );
 }
+function versionsToPrune(versions, maxVersions, keepPattern) {
+  const excess = versions.length - (maxVersions - 1);
+  if (excess <= 0) return [];
+  const keep = keepPattern ? new RegExp(keepPattern) : void 0;
+  const newestFirst = [...versions].sort(
+    (a2, b3) => Date.parse(b3.created_at) - Date.parse(a2.created_at) || b3.id - a2.id
+  );
+  const pinned = keep && newestFirst.find((v2) => keep.test(v2.version ?? ""));
+  return newestFirst.filter((v2) => v2 !== pinned).slice(-excess);
+}
 
 // src/main.ts
 async function run() {
@@ -119208,6 +119218,8 @@ async function run() {
     const deleteOlderVersions = core2.getInput("deleteOlderVersions").toLowerCase() === "true";
     const chunkSize = parseInt(core2.getInput("chunkSize"));
     const maxRetries = parseInt(core2.getInput("maxRetries"));
+    const maxVersions = parseInt(core2.getInput("maxVersions")) || 0;
+    const keepVersions = core2.getInput("keepVersions");
     if (isNaN(chunkSize)) {
       throw new Error("Invalid chunk size. Must be a number.");
     }
@@ -119239,6 +119251,16 @@ async function run() {
     const cookies = await getCookies(browser);
     if (assetName) {
       assetId = await resolveAssetId(assetName, cookies);
+    }
+    if (maxVersions > 0) {
+      const versions = await getAssetVersions(assetId, cookies);
+      if (versions.some((v2) => v2.version === version)) {
+        throw new Error(`Version ${version} is already on the asset.`);
+      }
+      for (const v2 of versionsToPrune(versions, maxVersions, keepVersions)) {
+        core2.info(`Making room: deleting version ${v2.version || v2.id} ...`);
+        await deleteAssetVersion(assetId, v2.id, cookies);
+      }
     }
     zipPath = await getZipPath(assetName, zipPath, makeZip);
     const uploadedVersionId = await uploadZip(

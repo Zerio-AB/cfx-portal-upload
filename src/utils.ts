@@ -466,8 +466,7 @@ export function versionsToPrune(
 
   const keep = keepPattern ? new RegExp(keepPattern) : undefined
   const newestFirst = [...versions].sort(
-    (a, b) =>
-      Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id
+    (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id
   )
   const pinned = keep && newestFirst.find(v => keep.test(v.version ?? ''))
 
