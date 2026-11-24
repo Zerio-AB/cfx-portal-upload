@@ -51,7 +51,8 @@ export async function run(): Promise<void> {
 
     const chunkSize = parseInt(core.getInput('chunkSize'))
     const maxRetries = parseInt(core.getInput('maxRetries'))
-    const maxVersions = parseInt(core.getInput('maxVersions') || '0')
+    // Not a number (or unset) means off; the portal's own limit still applies.
+    const maxVersions = parseInt(core.getInput('maxVersions')) || 0
     const keepVersions = core.getInput('keepVersions')
 
     if (isNaN(chunkSize)) {
@@ -60,10 +61,6 @@ export async function run(): Promise<void> {
 
     if (isNaN(maxRetries)) {
       throw new Error('Invalid max retries. Must be a number.')
-    }
-
-    if (isNaN(maxVersions)) {
-      throw new Error('Invalid max versions. Must be a number.')
     }
 
     if (skipUpload) {
