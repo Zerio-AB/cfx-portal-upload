@@ -18,7 +18,8 @@ import {
   getFxManifestVersion,
   getChangelog,
   getAssetVersions,
-  deleteAssetVersion
+  deleteAssetVersion,
+  versionsToPrune
 } from './utils.js'
 
 /**
@@ -50,6 +51,8 @@ export async function run(): Promise<void> {
 
     const chunkSize = parseInt(core.getInput('chunkSize'))
     const maxRetries = parseInt(core.getInput('maxRetries'))
+    const maxVersions = parseInt(core.getInput('maxVersions') || '0')
+    const keepVersions = core.getInput('keepVersions')
 
     if (isNaN(chunkSize)) {
       throw new Error('Invalid chunk size. Must be a number.')
@@ -57,6 +60,10 @@ export async function run(): Promise<void> {
 
     if (isNaN(maxRetries)) {
       throw new Error('Invalid max retries. Must be a number.')
+    }
+
+    if (isNaN(maxVersions)) {
+      throw new Error('Invalid max versions. Must be a number.')
     }
 
     if (skipUpload) {
@@ -93,6 +100,20 @@ export async function run(): Promise<void> {
 
     if (assetName) {
       assetId = await resolveAssetId(assetName, cookies)
+    }
+
+    // The portal refuses an upload once an asset is full, so make room first.
+    if (maxVersions > 0) {
+      const versions = await getAssetVersions(assetId, cookies)
+
+      if (versions.some(v => v.version === version)) {
+        throw new Error(`Version ${version} is already on the asset.`)
+      }
+
+      for (const v of versionsToPrune(versions, maxVersions, keepVersions)) {
+        core.info(`Making room: deleting version ${v.version || v.id} ...`)
+        await deleteAssetVersion(assetId, v.id, cookies)
+      }
     }
 
     zipPath = await getZipPath(assetName, zipPath, makeZip)

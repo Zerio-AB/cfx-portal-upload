@@ -52,6 +52,8 @@ CFX provides API keys for this action.
 | changelog           | string?  | The changelog for the new version                                  | If not provided, it will check `changelogFile` or the commit message.                                                                                                                |
 | changelogFile       | string?  | Path to a file containing the changelog                            | If provided and `changelog` is empty, the content of this file will be used.                                                                                                         |
 | deleteOlderVersions | boolean? | Delete older versions after successful upload (default: false)     | This will fetch all versions of the asset and delete all except the one just uploaded.                                                                                               |
+| maxVersions         | number?  | Make room before upload (default: 0, off)                          | Deletes the oldest versions first so the asset holds at most this many after the upload. Fails without deleting anything if the version is already on the asset.                     |
+| keepVersions        | string?  | A regular expression for a version to keep                         | With maxVersions, the newest version whose number matches is never deleted, e.g. `^2\.` keeps the last 2.x.                                                                          |
 
 | zipPath | string? | The path to your ZIP file that should be uploaded | This
 is the file location of your packed ZIP file inside the Workflow Container,

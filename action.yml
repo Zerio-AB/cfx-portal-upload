@@ -41,6 +41,17 @@ inputs:
     description: 'Delete older versions of the asset after upload'
     required: false
     default: false
+  maxVersions:
+    description:
+      'Before uploading, delete the oldest versions so the asset holds at most
+      this many after the upload (0 = off)'
+    required: false
+    default: 0
+  keepVersions:
+    description:
+      'A regular expression; with maxVersions, the newest version whose number
+      matches it is never deleted (e.g. ^2\. keeps the last 2.x)'
+    required: false
   skipUpload:
     description: 'Skip the upload and only go through the login process'
     required: false

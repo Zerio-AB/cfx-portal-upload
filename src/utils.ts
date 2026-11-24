@@ -1,6 +1,6 @@
 import { Browser, getInstalledBrowsers, install } from '@puppeteer/browsers'
 import { PUPPETEER_REVISIONS } from 'puppeteer-core/internal/revisions.js'
-import { AssetDetail, SearchResponse, Urls } from './types.js'
+import { AssetDetail, AssetVersion, SearchResponse, Urls } from './types.js'
 import { homedir } from 'os'
 import { join } from 'path'
 
@@ -445,4 +445,31 @@ export async function deleteAssetVersion(
       }
     }
   )
+}
+
+/**
+ * Picks the versions to delete so an upload fits: the oldest first, until the
+ * asset holds `maxVersions - 1`. The newest version whose number matches
+ * `keepPattern` is never picked.
+ * @param versions The asset's versions.
+ * @param maxVersions How many versions the asset may hold after the upload.
+ * @param keepPattern A regular expression for the version to keep, or ''.
+ * @returns {AssetVersion[]} The versions to delete, oldest last.
+ */
+export function versionsToPrune(
+  versions: AssetVersion[],
+  maxVersions: number,
+  keepPattern: string
+): AssetVersion[] {
+  const excess = versions.length - (maxVersions - 1)
+  if (excess <= 0) return []
+
+  const keep = keepPattern ? new RegExp(keepPattern) : undefined
+  const newestFirst = [...versions].sort(
+    (a, b) =>
+      Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id
+  )
+  const pinned = keep && newestFirst.find(v => keep.test(v.version ?? ''))
+
+  return newestFirst.filter(v => v !== pinned).slice(-excess)
 }

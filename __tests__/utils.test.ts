@@ -37,7 +37,8 @@ const {
   getAssetVersions,
   deleteAssetVersion,
   preparePuppeteer,
-  zipAsset
+  zipAsset,
+  versionsToPrune
 } = await import('../src/utils.js')
 
 function makeTempDir(): string {
@@ -515,6 +516,62 @@ describe('utils', () => {
       deleteIfExists('test-file')
 
       expect(fs.existsSync(filePath)).toBe(false)
+    })
+  })
+
+  describe('versionsToPrune', () => {
+    // Shaped like a Zerio-Radio asset: the first upload, the last 2.x, then 3.x.
+    const v = (id: number, version: string, day: number) => ({
+      id,
+      version,
+      state: 'active',
+      created_at: new Date(Date.UTC(2026, 0, day)).toISOString(),
+      changelog: '',
+      is_release_candidate: false
+    })
+    const ids = (list: { id: number }[]) => list.map(x => x.id)
+
+    it('should delete nothing while there is room', () => {
+      const versions = [v(1, '', 1), v(2, '2.0.12', 2), v(3, '3.0.0', 3)]
+      expect(versionsToPrune(versions, 5, '^2\.')).toEqual([])
+    })
+
+    it('should delete the oldest version to make room for one more', () => {
+      const versions = [
+        v(5, '3.0.2', 5),
+        v(1, '', 1),
+        v(4, '3.0.1', 4),
+        v(2, '2.0.12', 2),
+        v(3, '3.0.0', 3)
+      ]
+      expect(ids(versionsToPrune(versions, 5, '^2\.'))).toEqual([1])
+    })
+
+    it('should keep the newest version matching keepPattern', () => {
+      const versions = [
+        v(2, '2.0.12', 2),
+        v(3, '3.0.0', 3),
+        v(4, '3.0.1', 4),
+        v(5, '3.0.2', 5),
+        v(6, '3.0.3', 6)
+      ]
+      expect(ids(versionsToPrune(versions, 5, '^2\.'))).toEqual([3])
+      expect(ids(versionsToPrune(versions, 5, ''))).toEqual([2])
+    })
+
+    it('should only keep the newest of several matching versions', () => {
+      const versions = [
+        v(1, '2.0.11', 1),
+        v(2, '2.0.12', 2),
+        v(3, '3.0.0', 3),
+        v(4, '3.0.1', 4)
+      ]
+      expect(ids(versionsToPrune(versions, 3, '^2\.'))).toEqual([3, 1])
+    })
+
+    it('should use the upload order when dates are equal', () => {
+      const versions = [v(8, '3.0.1', 1), v(7, '3.0.0', 1)]
+      expect(ids(versionsToPrune(versions, 2, ''))).toEqual([7])
     })
   })
 })

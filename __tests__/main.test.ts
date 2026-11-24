@@ -17,7 +17,8 @@ const utilsMock = {
   getFxManifestVersion: jest.fn(),
   getChangelog: jest.fn(),
   getAssetVersions: jest.fn(),
-  deleteAssetVersion: jest.fn()
+  deleteAssetVersion: jest.fn(),
+  versionsToPrune: jest.fn()
 }
 
 const fsMock = {
@@ -536,5 +537,74 @@ describe('main', () => {
     expect(core.error).toHaveBeenCalledWith(
       expect.stringContaining('API Request failed [500]')
     )
+  })
+
+  describe('maxVersions', () => {
+    beforeEach(() => {
+      ;(core.getInput as jest.Mock).mockImplementation((name: string) => {
+        switch (name) {
+          case 'assetId':
+            return '123'
+          case 'zipPath':
+            return 'test.zip'
+          case 'chunkSize':
+            return '1024'
+          case 'maxRetries':
+            return '1'
+          case 'maxVersions':
+            return '5'
+          case 'keepVersions':
+            return '^2\.'
+          case 'beta':
+            return 'false'
+          default:
+            return ''
+        }
+      })
+      pageMock.evaluate.mockResolvedValueOnce({ url: 'https://forum-redirect' })
+      ;(utils.getFxManifestVersion as jest.Mock).mockReturnValue('3.0.3')
+      ;(utils.getChangelog as jest.Mock).mockReturnValue('test changelog')
+      ;(axios.post as jest.Mock).mockResolvedValue({
+        data: { asset_id: 123, version_id: 456, errors: null }
+      })
+    })
+
+    it('should delete the picked versions before uploading', async () => {
+      const versions = [
+        { id: 1, version: '' },
+        { id: 2, version: '2.0.12' }
+      ]
+      ;(utils.getAssetVersions as jest.Mock).mockResolvedValue(versions)
+      ;(utils.versionsToPrune as jest.Mock).mockReturnValue([versions[0]])
+
+      await main.run()
+
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(utils.versionsToPrune).toHaveBeenCalledWith(versions, 5, '^2\.')
+      expect(utils.deleteAssetVersion).toHaveBeenCalledTimes(1)
+      expect(utils.deleteAssetVersion).toHaveBeenCalledWith(
+        '123',
+        1,
+        expect.anything()
+      )
+      const deleted = (utils.deleteAssetVersion as jest.Mock).mock
+        .invocationCallOrder[0]
+      const uploaded = (axios.post as jest.Mock).mock.invocationCallOrder[0]
+      expect(deleted).toBeLessThan(uploaded)
+    })
+
+    it('should delete nothing when the version is already on the asset', async () => {
+      ;(utils.getAssetVersions as jest.Mock).mockResolvedValue([
+        { id: 9, version: '3.0.3' }
+      ])
+
+      await main.run()
+
+      expect(core.setFailed).toHaveBeenCalledWith(
+        'Version 3.0.3 is already on the asset.'
+      )
+      expect(utils.deleteAssetVersion).not.toHaveBeenCalled()
+      expect(axios.post).not.toHaveBeenCalled()
+    })
   })
 })
