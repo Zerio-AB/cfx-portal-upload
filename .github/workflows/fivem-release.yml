@@ -189,7 +189,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           manifest="$(unzip -Z1 "$ZIP" | grep -m1 -E '(^|/)fxmanifest\.lua$')"
-          zipped="$(unzip -p "$ZIP" "$manifest" | sed -nE "s/^version[[:space:]]+['\"]([^'\"]+)['\"].*/\1/p" | head -n 1)"
+          # unzip reads its file argument as a wildcard, so a folder like
+          # [radio] has to be matched as [[]radio].
+          pattern="$(printf '%s' "$manifest" | sed 's/\[/[[]/g')"
+          zipped="$(unzip -p "$ZIP" "$pattern" | sed -nE "s/^version[[:space:]]+['\"]([^'\"]+)['\"].*/\1/p" | head -n 1)"
           if [ "$zipped" != "$VERSION" ]; then
             echo "::error::$ZIP: $manifest has version \"$zipped\", expected \"$VERSION\""
             exit 1
