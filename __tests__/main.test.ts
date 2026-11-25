@@ -606,5 +606,21 @@ describe('main', () => {
       expect(utils.deleteAssetVersion).not.toHaveBeenCalled()
       expect(axios.post).not.toHaveBeenCalled()
     })
+
+    it('should skip without failing when ifVersionExists is skip', async () => {
+      const inputs = (core.getInput as jest.Mock).getMockImplementation()!
+      ;(core.getInput as jest.Mock).mockImplementation((name: string) =>
+        name === 'ifVersionExists' ? 'skip' : inputs(name)
+      )
+      ;(utils.getAssetVersions as jest.Mock).mockResolvedValue([
+        { id: 9, version: '3.0.3' }
+      ])
+
+      await main.run()
+
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(utils.deleteAssetVersion).not.toHaveBeenCalled()
+      expect(axios.post).not.toHaveBeenCalled()
+    })
   })
 })

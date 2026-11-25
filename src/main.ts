@@ -54,6 +54,9 @@ export async function run(): Promise<void> {
     // Not a number (or unset) means off; the portal's own limit still applies.
     const maxVersions = parseInt(core.getInput('maxVersions')) || 0
     const keepVersions = core.getInput('keepVersions')
+    // With maxVersions: 'skip' when the asset already has the version; anything else fails.
+    const skipExisting =
+      (core.getInput('ifVersionExists') || '').toLowerCase() === 'skip'
 
     if (isNaN(chunkSize)) {
       throw new Error('Invalid chunk size. Must be a number.')
@@ -104,6 +107,11 @@ export async function run(): Promise<void> {
       const versions = await getAssetVersions(assetId, cookies)
 
       if (versions.some(v => v.version === version)) {
+        // A re-run after a partial release: this asset already took it.
+        if (skipExisting) {
+          core.info(`Version ${version} is already on the asset, skipping.`)
+          return
+        }
         throw new Error(`Version ${version} is already on the asset.`)
       }
 

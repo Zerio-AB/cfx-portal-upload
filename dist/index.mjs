@@ -119220,6 +119220,7 @@ async function run() {
     const maxRetries = parseInt(core2.getInput("maxRetries"));
     const maxVersions = parseInt(core2.getInput("maxVersions")) || 0;
     const keepVersions = core2.getInput("keepVersions");
+    const skipExisting = (core2.getInput("ifVersionExists") || "").toLowerCase() === "skip";
     if (isNaN(chunkSize)) {
       throw new Error("Invalid chunk size. Must be a number.");
     }
@@ -119255,6 +119256,10 @@ async function run() {
     if (maxVersions > 0) {
       const versions = await getAssetVersions(assetId, cookies);
       if (versions.some((v2) => v2.version === version)) {
+        if (skipExisting) {
+          core2.info(`Version ${version} is already on the asset, skipping.`);
+          return;
+        }
         throw new Error(`Version ${version} is already on the asset.`);
       }
       for (const v2 of versionsToPrune(versions, maxVersions, keepVersions)) {
