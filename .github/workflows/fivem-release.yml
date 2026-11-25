@@ -1,0 +1,283 @@
+name: fivem release
+
+# Shared release pipeline for Zerio's paid FiveM resources. Each resource calls
+# it from its own .github/workflows/release.yml, on pull requests (checks only)
+# and on pushes to main (checks, then release).
+#
+# What a release is:
+# - The version in fxmanifest.lua (`version "1.2.3"`) is the release. A version
+#   is released once: after a release the commit is tagged v1.2.3, and a tagged
+#   version is never uploaded again. Pushes that don't bump the version only
+#   build.
+# - Every release needs its own entry at the top of CHANGELOG.md, headed
+#   "## 1.2.3 — 2026-01-31". The portal shows its heading and opening
+#   paragraph; the GitHub release gets the whole entry. A pull request that
+#   bumps the version without one fails here, before it can be merged.
+# - Each portal asset keeps at most `max-versions` versions. The oldest are
+#   deleted to make room before an upload, except the newest version matching
+#   `keep-versions` (zerio-radio keeps its last 2.x this way).
+# - A version with a pre-release part (1.2.0-beta.1) is uploaded as a release
+#   candidate, so customers on the stable version aren't moved to it.
+#
+# Re-running a failed release is safe: assets that already have the version are
+# skipped, and the tag is only made once every asset has it.
+
+on:
+  workflow_call:
+    inputs:
+      assets:
+        description: 'JSON array of Cfx portal asset names to upload to, e.g. ["Zerio-Parking"]'
+        type: string
+        required: true
+      zip:
+        description: "The zip file the package command writes, relative to the repository root"
+        type: string
+        required: true
+      ui-dir:
+        description: "Folder of the NUI project, built with pnpm before packaging"
+        type: string
+        default: ui
+      package-command:
+        description: "Builds the zip after the UI is built"
+        type: string
+        default: bash scripts/package.sh
+      max-versions:
+        description: "How many versions each portal asset holds at most"
+        type: number
+        default: 5
+      keep-versions:
+        description: "Regular expression; the newest version matching it is never deleted to make room"
+        type: string
+        default: ""
+      release:
+        description: "Release when the version is new. Pass false on pull requests"
+        type: boolean
+        default: false
+    secrets:
+      FORUM_COOKIE:
+        required: false
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      beta: ${{ steps.version.outputs.beta }}
+      release: ${{ steps.released.outputs.release }}
+    steps:
+      # Full history, so the release tags are there.
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the version
+        id: version
+        run: |
+          version="$(sed -nE "s/^version[[:space:]]+['\"]([^'\"]+)['\"].*/\1/p" fxmanifest.lua | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "::error file=fxmanifest.lua::write the version as: version \"1.2.3\" (no parentheses), the portal upload cannot read it otherwise"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) echo "beta=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "beta=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "Version $version"
+
+      - name: Check ui_page is the bundled UI, not a dev server
+        run: |
+          if grep -nE "^\s*ui_page[[:space:](]*['\"]https?://" fxmanifest.lua; then
+            echo "::error file=fxmanifest.lua::ui_page points at a dev server, use html/index.html"
+            exit 1
+          fi
+
+      - name: Check whether this version is released
+        id: released
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then
+            echo "::notice::$VERSION is already released. To release, bump the version in fxmanifest.lua and add a CHANGELOG.md entry for it."
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          fi
+
+      # An unreleased version must have its own entry, so a version bump fails
+      # on its pull request when the notes are missing, not on main.
+      - name: Release notes
+        if: steps.released.outputs.released == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::error::CHANGELOG.md is missing. Add a \"## $VERSION — $(date +%F)\" entry describing this release."
+            exit 1
+          fi
+
+          # The newest entry: from the first "## " heading up to the next one.
+          awk '/^## /{ if (seen) exit; seen = 1 } seen' CHANGELOG.md > "$RUNNER_TEMP/entry.md"
+          heading="$(head -n 1 "$RUNNER_TEMP/entry.md" | sed -E 's/^## //')"
+          case "$heading" in
+            "$VERSION" | "$VERSION "*) ;;
+            *)
+              echo "::error file=CHANGELOG.md::the newest entry is \"$heading\". Add a \"## $VERSION — $(date +%F)\" entry above it describing this release."
+              exit 1
+              ;;
+          esac
+
+          # The portal shows the heading and the opening paragraph.
+          awk '
+            NR == 1 { sub(/^## /, ""); print; print ""; next }
+            /^#/ { exit }
+            NF { para = 1; print; next }
+            para { exit }
+          ' "$RUNNER_TEMP/entry.md" > "$RUNNER_TEMP/portal.md"
+          if [ "$(grep -c . "$RUNNER_TEMP/portal.md")" -lt 2 ]; then
+            echo "::error file=CHANGELOG.md::the $VERSION entry needs an opening paragraph: what changed for server owners and anything they must do after updating"
+            exit 1
+          fi
+          printf '\n%s\n' "Full changelog: CHANGELOG.md in the download." >> "$RUNNER_TEMP/portal.md"
+          tail -n +2 "$RUNNER_TEMP/entry.md" > "$RUNNER_TEMP/github.md"
+          {
+            echo "### Portal changelog for $VERSION"
+            echo
+            cat "$RUNNER_TEMP/portal.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Find the Node version
+        id: node
+        run: |
+          if [ -f "${{ inputs.ui-dir }}/.nvmrc" ]; then
+            echo "file=${{ inputs.ui-dir }}/.nvmrc" >> "$GITHUB_OUTPUT"
+          else
+            echo "file=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ${{ steps.node.outputs.file }}
+          node-version: ${{ steps.node.outputs.file == '' && '20' || '' }}
+
+      # The pnpm version comes from "packageManager" in the UI's package.json.
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ${{ inputs.ui-dir }}/package.json
+          run_install: false
+
+      - name: Build UI
+        working-directory: ${{ inputs.ui-dir }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Package
+        run: ${{ inputs.package-command }}
+
+      # The upload reads the version from the first fxmanifest.lua in the zip.
+      - name: Check the zip carries this version
+        env:
+          ZIP: ${{ inputs.zip }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          manifest="$(unzip -Z1 "$ZIP" | grep -m1 -E '(^|/)fxmanifest\.lua$')"
+          zipped="$(unzip -p "$ZIP" "$manifest" | sed -nE "s/^version[[:space:]]+['\"]([^'\"]+)['\"].*/\1/p" | head -n 1)"
+          if [ "$zipped" != "$VERSION" ]; then
+            echo "::error::$ZIP: $manifest has version \"$zipped\", expected \"$VERSION\""
+            exit 1
+          fi
+          ls -la "$ZIP"
+
+      # After packaging, so the notes don't end up in the zip.
+      - name: Collect the release notes
+        if: steps.released.outputs.released == 'false'
+        run: |
+          mkdir -p release-notes
+          cp "$RUNNER_TEMP/portal.md" "$RUNNER_TEMP/github.md" release-notes/
+
+      - name: Keep the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            ${{ inputs.zip }}
+            release-notes/
+          retention-days: 14
+
+  upload:
+    name: Upload ${{ matrix.asset }}
+    needs: build
+    if: needs.build.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      # One portal login at a time, and every asset gets its chance.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        asset: ${{ fromJSON(inputs.assets) }}
+    steps:
+      - name: Get the release files
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Read the portal changelog
+        run: |
+          {
+            echo "PORTAL_CHANGELOG<<PORTAL_CHANGELOG_END"
+            cat release-notes/portal.md
+            echo "PORTAL_CHANGELOG_END"
+          } >> "$GITHUB_ENV"
+
+      # Pinned to a commit of this repository, so the upload code a release
+      # runs can't change under it.
+      - name: Upload to the Cfx portal
+        uses: Zerio-AB/cfx-portal-upload@f2ba3783790554f688197e1617a9ab68c9db6d85
+        with:
+          cookie: ${{ secrets.FORUM_COOKIE }}
+          assetName: ${{ matrix.asset }}
+          zipPath: ${{ github.workspace }}/${{ inputs.zip }}
+          beta: ${{ needs.build.outputs.beta }}
+          changelog: ${{ env.PORTAL_CHANGELOG }}
+          maxVersions: ${{ inputs.max-versions }}
+          keepVersions: ${{ inputs.keep-versions }}
+          ifVersionExists: skip
+
+  # The tag marks the version as released, so it is made only after every
+  # asset has the version.
+  tag:
+    name: Tag v${{ needs.build.outputs.version }}
+    needs: [build, upload]
+    if: needs.build.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Get the release files
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      # Notes only: the zip is unescrowed source, so it stays out of releases.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          BETA: ${{ needs.build.outputs.beta }}
+        run: |
+          flags=()
+          if [ "$BETA" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes-file release-notes/github.md \
+            "${flags[@]}"
